@@ -7,7 +7,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;1,400;1,500&family=Lato:wght@300;400&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script defer src="/_vercel/insights/script.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
@@ -599,6 +598,7 @@ const UNDO_DELETE_WINDOW_MS = 8000;
 
 let books = [];
 let libraryUpdatedAt = null;
+let libraryOwnerId = null;
 let editId = null;
 let selPal = 0;
 let pendingPdfFile = null;
@@ -719,6 +719,7 @@ function libraryPayload() {
   return {
     version: 5,
     updatedAt: libraryUpdatedAt || new Date().toISOString(),
+    ownerId: libraryOwnerId || null,
     books: serializableBooks(),
   };
 }
@@ -730,6 +731,41 @@ function safeTime(value) {
 
 function markLibraryChanged() {
   libraryUpdatedAt = new Date().toISOString();
+}
+
+function claimLibraryForCurrentUser() {
+  if(currentUser?.id) libraryOwnerId = currentUser.id;
+}
+
+function clearInMemoryLibraryView() {
+  books = [];
+  libraryUpdatedAt = null;
+  cloudDirty = false;
+  lastSyncedPayloadSig = '';
+  selectedBookIds.clear();
+  batchDeleteMode = false;
+}
+
+function clearPersistedLocalLibrary() {
+  localStorage.removeItem(LOCAL_CACHE_KEY);
+  localStorage.removeItem(LEGACY_LOCAL_KEY);
+  libraryOwnerId = null;
+}
+
+function hardLocalSignOutCleanup() {
+  currentUser = null;
+  clearRememberedAuthSession();
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  localStorage.removeItem(`${AUTH_STORAGE_KEY}-code-verifier`);
+  clearPersistedLocalLibrary();
+  clearInMemoryLibraryView();
+  closeDetail();
+  closeModal();
+  closeBatchAdd();
+  updateBatchDeleteUi();
+  render();
+  refreshSyncUI();
+  syncPanelFromAuthState();
 }
 
 function saveLocalCache() {
@@ -746,6 +782,7 @@ function loadLocalCache() {
       const parsed = JSON.parse(cloudCache);
       books = normalizeBooks(parsed.books);
       libraryUpdatedAt = parsed.updatedAt || null;
+      libraryOwnerId = parsed.ownerId || null;
       saveLocalCache();
       return;
     }
@@ -753,6 +790,7 @@ function loadLocalCache() {
     if(legacy) {
       books = normalizeBooks(JSON.parse(legacy));
       libraryUpdatedAt = new Date().toISOString();
+      libraryOwnerId = null;
       saveLocalCache();
     }
   } catch(e) {}
@@ -913,8 +951,9 @@ async function initSupabaseFromSettings(settings) {
     currentUser = session?.user || null;
     if(session?.access_token && session?.refresh_token) {
       saveRememberedAuthSession(session);
+      claimLibraryForCurrentUser();
     } else if(event === 'SIGNED_OUT') {
-      clearRememberedAuthSession();
+      hardLocalSignOutCleanup();
     }
     refreshSyncUI();
     syncPanelFromAuthState();
@@ -1294,6 +1333,7 @@ async function resolveSyncConflict(choice) {
 
   books = normalizeBooks(nextBooks);
   libraryUpdatedAt = nextUpdatedAt;
+  if(currentUser?.id) libraryOwnerId = currentUser.id;
   saveLocalCache();
   render();
   closeSyncConflictModal();
@@ -1417,12 +1457,12 @@ async function uploadPdfFileToCloud(file, bookId) {
   if(error) throw error;
 
   let pdfUrl = null;
-  const signed = await supabaseClient.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 30);
-  if(signed?.data?.signedUrl) {
-    pdfUrl = signed.data.signedUrl;
+  const pub = supabaseClient.storage.from(bucket).getPublicUrl(path);
+  if(pub?.data?.publicUrl) {
+    pdfUrl = pub.data.publicUrl;
   } else {
-    const pub = supabaseClient.storage.from(bucket).getPublicUrl(path);
-    if(pub?.data?.publicUrl) pdfUrl = pub.data.publicUrl;
+    const signed = await supabaseClient.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 30);
+    if(signed?.data?.signedUrl) pdfUrl = signed.data.signedUrl;
   }
 
   return {
@@ -1431,17 +1471,6 @@ async function uploadPdfFileToCloud(file, bookId) {
     pdfName: file?.name || `${bookId}.pdf`,
     pdfSize: Number(file?.size) || 0,
   };
-}
-
-async function createSignedPdfUrl(pdfPath, expiresIn = 60 * 60) {
-  if(!pdfPath || !supabaseClient || !currentUser) return null;
-  try {
-    const { data, error } = await supabaseClient.storage.from(currentBucket()).createSignedUrl(pdfPath, expiresIn);
-    if(error) return null;
-    return data?.signedUrl || null;
-  } catch(e) {
-    return null;
-  }
 }
 
 async function fetchPdfBlobForBook(book) {
@@ -1456,16 +1485,6 @@ async function fetchPdfBlobForBook(book) {
   }
 
   const pdfPath = typeof book.pdfPath === 'string' ? book.pdfPath.trim() : '';
-  if(pdfPath) {
-    const signedUrl = await createSignedPdfUrl(pdfPath);
-    if(signedUrl) {
-      try {
-        const signedRes = await fetch(signedUrl);
-        if(signedRes.ok) return await signedRes.blob();
-      } catch(e) {}
-    }
-  }
-
   if(pdfPath && supabaseClient && currentUser) {
     try {
       const { data, error } = await supabaseClient.storage.from(currentBucket()).download(pdfPath);
@@ -1493,23 +1512,18 @@ async function fetchPdfBytesForBook(book) {
 async function resolveReaderPdfSource(book) {
   if(!book) return null;
 
-  const sources = [];
-
   const pdfUrl = typeof book.pdfUrl === 'string' ? book.pdfUrl.trim() : '';
-  if(pdfUrl) sources.push({ type: 'url', value: pdfUrl });
-
-  const pdfPath = typeof book.pdfPath === 'string' ? book.pdfPath.trim() : '';
-  if(pdfPath) {
-    const signedUrl = await createSignedPdfUrl(pdfPath);
-    if(signedUrl) sources.push({ type: 'url', value: signedUrl });
+  if(pdfUrl) {
+    return { type: 'url', value: pdfUrl };
   }
 
+  const pdfPath = typeof book.pdfPath === 'string' ? book.pdfPath.trim() : '';
   if(pdfPath && supabaseClient && currentUser) {
     try {
       const { data, error } = await supabaseClient.storage.from(currentBucket()).download(pdfPath);
       if(!error && data) {
         const ab = await data.arrayBuffer();
-        sources.push({ type: 'data', value: new Uint8Array(ab) });
+        return { type: 'data', value: new Uint8Array(ab) };
       }
     } catch(e) {}
   }
@@ -1521,11 +1535,11 @@ async function resolveReaderPdfSource(book) {
     const blob = dataUrlToBlob(legacyRaw);
     if(blob) {
       const ab = await blob.arrayBuffer();
-      sources.push({ type: 'data', value: new Uint8Array(ab) });
+      return { type: 'data', value: new Uint8Array(ab) };
     }
   }
 
-  return sources.length ? sources : null;
+  return null;
 }
 
 async function migrateLegacyPdfBooksInBackground() {
@@ -1992,6 +2006,7 @@ function openEdit(id) {
 }
 
 function persistLibrary(options = {}) {
+  claimLibraryForCurrentUser();
   markLibraryChanged();
   saveLocalCache();
   if(options.render !== false) render();
@@ -2002,6 +2017,7 @@ function persistLibrary(options = {}) {
 }
 
 function persistLibraryQuiet() {
+  claimLibraryForCurrentUser();
   markLibraryChanged();
   saveLocalCache();
   cloudDirty = true;
@@ -2367,6 +2383,12 @@ async function openPdfInTab(id) {
   const b = books.find(x => String(x.id) === String(id));
   if(!b || !hasPdfAsset(b)) return;
 
+  const directUrl = typeof b.pdfUrl === 'string' ? b.pdfUrl.trim() : '';
+  if(directUrl) {
+    window.open(directUrl, '_blank', 'noopener');
+    return;
+  }
+
   const popup = window.open('', '_blank');
   try {
     const blob = await fetchPdfBlobForBook(b);
@@ -2436,22 +2458,14 @@ async function openReader(id) {
     if(!pdfjsLib) throw new Error('PDF engine unavailable');
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-    const sources = await resolveReaderPdfSource(b);
-    if(!sources?.length) throw new Error('PDF source unavailable');
+    const source = await resolveReaderPdfSource(b);
+    if(!source) throw new Error('PDF source unavailable');
 
-    let loaded = null;
-    for(const source of sources) {
-      try {
-        const loadingTask = source.type === 'url'
-          ? pdfjsLib.getDocument(source.value)
-          : pdfjsLib.getDocument({ data: source.value });
-        loaded = await loadingTask.promise;
-        if(loaded) break;
-      } catch(e) {}
-    }
-    if(!loaded) throw new Error('All PDF sources failed');
+    const loadingTask = source.type === 'url'
+      ? pdfjsLib.getDocument(source.value)
+      : pdfjsLib.getDocument({ data: source.value });
 
-    readerDoc = loaded;
+    readerDoc = await loadingTask.promise;
     readerTotalPages = readerDoc.numPages || 1;
     const savedPage = Number(b.lastReadPage || 1);
     readerPage = Math.min(readerTotalPages, Math.max(1, Math.floor(savedPage) || 1));
@@ -2552,6 +2566,7 @@ function importBackup(e) {
       if(!Array.isArray(imported)) throw new Error('Invalid format');
       books = normalizeBooks(imported);
       libraryUpdatedAt = data.updatedAt || new Date().toISOString();
+      if(currentUser?.id) libraryOwnerId = currentUser.id;
       saveLocalCache();
       render();
       cloudDirty = true;
@@ -2602,10 +2617,39 @@ async function handlePostLogin() {
     const remote = await fetchCloudLibrary();
     const hasRemote = !!remote?.books?.length;
     const hasLocal = !!books.length;
+    const signedInUserId = currentUser?.id || null;
+    const localOwnedByAnotherUser = !!(hasLocal && libraryOwnerId && signedInUserId && libraryOwnerId !== signedInUserId);
+
+    if(localOwnedByAnotherUser) {
+      if(hasRemote) {
+        books = normalizeBooks(remote.books);
+        libraryUpdatedAt = remote.updatedAt || new Date().toISOString();
+        libraryOwnerId = signedInUserId;
+        cloudDirty = false;
+        saveLocalCache();
+        render();
+        lastSyncedPayloadSig = currentPayloadSignature();
+        setSyncStatus('Cloud connected', 'ok');
+        toast('Switched account. Loaded that account\'s cloud library.');
+      } else {
+        books = [];
+        libraryUpdatedAt = new Date().toISOString();
+        libraryOwnerId = signedInUserId;
+        cloudDirty = false;
+        saveLocalCache();
+        render();
+        lastSyncedPayloadSig = currentPayloadSignature();
+        setSyncStatus('Cloud empty', 'warn');
+        toast('Switched account. Previous account books stayed private.');
+      }
+      await migrateLegacyPdfBooksInBackground();
+      return;
+    }
 
     if(hasRemote && hasLocal && booksDiffer(books, remote.books)) {
       books = normalizeBooks(remote.books);
       libraryUpdatedAt = remote.updatedAt || new Date().toISOString();
+      libraryOwnerId = signedInUserId;
       cloudDirty = false;
       saveLocalCache();
       render();
@@ -2620,6 +2664,7 @@ async function handlePostLogin() {
       if(!hasLocal || safeTime(remote.updatedAt) >= safeTime(libraryUpdatedAt)) {
         books = normalizeBooks(remote.books);
         libraryUpdatedAt = remote.updatedAt || new Date().toISOString();
+        libraryOwnerId = signedInUserId;
         cloudDirty = false;
         saveLocalCache();
         render();
@@ -2627,11 +2672,14 @@ async function handlePostLogin() {
         setSyncStatus('Cloud connected', 'ok');
         toast('Loaded your cloud library.');
       } else {
+        if(!libraryOwnerId) libraryOwnerId = signedInUserId;
         await syncToCloud(true);
       }
     } else if(hasLocal) {
+      if(!libraryOwnerId) libraryOwnerId = signedInUserId;
       await syncToCloud(true);
     } else {
+      libraryOwnerId = signedInUserId;
       setSyncStatus('Cloud empty', 'warn');
     }
 
@@ -2674,6 +2722,16 @@ async function syncToCloud(silent) {
     return false;
   }
 
+  const signedInUserId = currentUser?.id || null;
+  if(!signedInUserId) return false;
+  if(libraryOwnerId && libraryOwnerId !== signedInUserId) {
+    cloudDirty = false;
+    setSyncStatus('Account mismatch', 'error');
+    if(!silent) toast('This library belongs to another account. Pull cloud copy first.');
+    return false;
+  }
+  if(!libraryOwnerId) libraryOwnerId = signedInUserId;
+
   try {
     syncInFlight = true;
     refreshSyncUI();
@@ -2703,6 +2761,7 @@ async function syncToCloud(silent) {
     if(error) throw error;
 
     cloudDirty = false;
+    saveLocalCache();
     lastSyncedPayloadSig = payload;
     setSyncStatus('Cloud connected', 'ok');
     if(!silent) toast('Library synced to cloud.');
@@ -2733,6 +2792,7 @@ async function pullFromCloud() {
     }
     books = remote.books;
     libraryUpdatedAt = remote.updatedAt || new Date().toISOString();
+    libraryOwnerId = currentUser?.id || libraryOwnerId || null;
     cloudDirty = false;
     saveLocalCache();
     render();
@@ -2793,20 +2853,27 @@ async function signIn() {
 }
 
 async function signOutCloud() {
-  if(!supabaseClient) return;
-  const { error } = await supabaseClient.auth.signOut();
-  if(error) {
-    toast(error.message);
+  let signOutError = null;
+  if(supabaseClient) {
+    const { error } = await supabaseClient.auth.signOut();
+    if(error) signOutError = error;
+  }
+
+  hardLocalSignOutCleanup();
+
+  if(signOutError) {
+    toast('Signed out locally and cleared books. Cloud sign-out had an issue.');
     return;
   }
-  currentUser = null;
-  clearRememberedAuthSession();
-  refreshSyncUI();
-  toast('Signed out.');
+  toast('Signed out and cleared local account cache.');
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
   loadLocalCache();
+  if(libraryOwnerId && !readRememberedAuthSession()) {
+    clearPersistedLocalLibrary();
+    clearInMemoryLibraryView();
+  }
   render();
   updateBatchDeleteUi();
   buildPalette();
@@ -2892,6 +2959,18 @@ document.addEventListener('keydown', async e => {
 </script>
 </body>
 </html>
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
