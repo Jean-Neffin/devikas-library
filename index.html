@@ -1417,12 +1417,12 @@ async function uploadPdfFileToCloud(file, bookId) {
   if(error) throw error;
 
   let pdfUrl = null;
-  const pub = supabaseClient.storage.from(bucket).getPublicUrl(path);
-  if(pub?.data?.publicUrl) {
-    pdfUrl = pub.data.publicUrl;
+  const signed = await supabaseClient.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 30);
+  if(signed?.data?.signedUrl) {
+    pdfUrl = signed.data.signedUrl;
   } else {
-    const signed = await supabaseClient.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 30);
-    if(signed?.data?.signedUrl) pdfUrl = signed.data.signedUrl;
+    const pub = supabaseClient.storage.from(bucket).getPublicUrl(path);
+    if(pub?.data?.publicUrl) pdfUrl = pub.data.publicUrl;
   }
 
   return {
@@ -1431,6 +1431,17 @@ async function uploadPdfFileToCloud(file, bookId) {
     pdfName: file?.name || `${bookId}.pdf`,
     pdfSize: Number(file?.size) || 0,
   };
+}
+
+async function createSignedPdfUrl(pdfPath, expiresIn = 60 * 60) {
+  if(!pdfPath || !supabaseClient || !currentUser) return null;
+  try {
+    const { data, error } = await supabaseClient.storage.from(currentBucket()).createSignedUrl(pdfPath, expiresIn);
+    if(error) return null;
+    return data?.signedUrl || null;
+  } catch(e) {
+    return null;
+  }
 }
 
 async function fetchPdfBlobForBook(book) {
@@ -1445,6 +1456,16 @@ async function fetchPdfBlobForBook(book) {
   }
 
   const pdfPath = typeof book.pdfPath === 'string' ? book.pdfPath.trim() : '';
+  if(pdfPath) {
+    const signedUrl = await createSignedPdfUrl(pdfPath);
+    if(signedUrl) {
+      try {
+        const signedRes = await fetch(signedUrl);
+        if(signedRes.ok) return await signedRes.blob();
+      } catch(e) {}
+    }
+  }
+
   if(pdfPath && supabaseClient && currentUser) {
     try {
       const { data, error } = await supabaseClient.storage.from(currentBucket()).download(pdfPath);
@@ -1472,18 +1493,23 @@ async function fetchPdfBytesForBook(book) {
 async function resolveReaderPdfSource(book) {
   if(!book) return null;
 
+  const sources = [];
+
   const pdfUrl = typeof book.pdfUrl === 'string' ? book.pdfUrl.trim() : '';
-  if(pdfUrl) {
-    return { type: 'url', value: pdfUrl };
-  }
+  if(pdfUrl) sources.push({ type: 'url', value: pdfUrl });
 
   const pdfPath = typeof book.pdfPath === 'string' ? book.pdfPath.trim() : '';
+  if(pdfPath) {
+    const signedUrl = await createSignedPdfUrl(pdfPath);
+    if(signedUrl) sources.push({ type: 'url', value: signedUrl });
+  }
+
   if(pdfPath && supabaseClient && currentUser) {
     try {
       const { data, error } = await supabaseClient.storage.from(currentBucket()).download(pdfPath);
       if(!error && data) {
         const ab = await data.arrayBuffer();
-        return { type: 'data', value: new Uint8Array(ab) };
+        sources.push({ type: 'data', value: new Uint8Array(ab) });
       }
     } catch(e) {}
   }
@@ -1495,11 +1521,11 @@ async function resolveReaderPdfSource(book) {
     const blob = dataUrlToBlob(legacyRaw);
     if(blob) {
       const ab = await blob.arrayBuffer();
-      return { type: 'data', value: new Uint8Array(ab) };
+      sources.push({ type: 'data', value: new Uint8Array(ab) });
     }
   }
 
-  return null;
+  return sources.length ? sources : null;
 }
 
 async function migrateLegacyPdfBooksInBackground() {
@@ -2341,12 +2367,6 @@ async function openPdfInTab(id) {
   const b = books.find(x => String(x.id) === String(id));
   if(!b || !hasPdfAsset(b)) return;
 
-  const directUrl = typeof b.pdfUrl === 'string' ? b.pdfUrl.trim() : '';
-  if(directUrl) {
-    window.open(directUrl, '_blank', 'noopener');
-    return;
-  }
-
   const popup = window.open('', '_blank');
   try {
     const blob = await fetchPdfBlobForBook(b);
@@ -2416,14 +2436,22 @@ async function openReader(id) {
     if(!pdfjsLib) throw new Error('PDF engine unavailable');
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-    const source = await resolveReaderPdfSource(b);
-    if(!source) throw new Error('PDF source unavailable');
+    const sources = await resolveReaderPdfSource(b);
+    if(!sources?.length) throw new Error('PDF source unavailable');
 
-    const loadingTask = source.type === 'url'
-      ? pdfjsLib.getDocument(source.value)
-      : pdfjsLib.getDocument({ data: source.value });
+    let loaded = null;
+    for(const source of sources) {
+      try {
+        const loadingTask = source.type === 'url'
+          ? pdfjsLib.getDocument(source.value)
+          : pdfjsLib.getDocument({ data: source.value });
+        loaded = await loadingTask.promise;
+        if(loaded) break;
+      } catch(e) {}
+    }
+    if(!loaded) throw new Error('All PDF sources failed');
 
-    readerDoc = await loadingTask.promise;
+    readerDoc = loaded;
     readerTotalPages = readerDoc.numPages || 1;
     const savedPage = Number(b.lastReadPage || 1);
     readerPage = Math.min(readerTotalPages, Math.max(1, Math.floor(savedPage) || 1));
