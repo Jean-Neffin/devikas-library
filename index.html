@@ -219,7 +219,24 @@ body {
 .backup-import { position: relative; }
 .backup-import input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
 
-.sync-card { margin: 2rem 0 0; padding: 18px 20px; background: var(--cream); border: 0.5px solid var(--blush); border-radius: 18px; box-shadow: 0 4px 18px var(--shadow); }
+.sync-card {
+  margin: 2rem 0 0;
+  padding: 18px 20px;
+  background: var(--cream);
+  border: 0.5px solid var(--blush);
+  border-radius: 18px;
+  box-shadow: 0 4px 18px var(--shadow);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+.sync-card:hover {
+  border-color: #ddb1bf;
+  box-shadow: 0 10px 28px rgba(139,74,94,0.18), 0 0 0 1px rgba(196,118,138,0.18);
+  transform: translateY(-2px);
+}
+.sync-card.collapsed:hover {
+  cursor: pointer;
+  background: #fffaf7;
+}
 .sync-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .sync-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .sync-kicker { font-size: 11px; color: var(--ink3); letter-spacing: 0.12em; text-transform: uppercase; display: block; margin-bottom: 4px; }
@@ -342,7 +359,7 @@ body {
     <div class="grid" id="grid"></div>
   </div>
 
-  <div class="sync-card" id="sync-card">
+  <div class="sync-card" id="sync-card" onclick="onSyncCardClick(event)">
     <div class="sync-header">
       <div>
         <span class="sync-kicker">Cloud library</span>
@@ -360,18 +377,6 @@ body {
 
     <div class="sync-body" id="sync-body">
     <div class="sync-grid">
-      <div class="sync-field">
-        <label>Supabase project URL</label>
-        <input id="cloud-url" type="text" placeholder="https://your-project.supabase.co">
-      </div>
-      <div class="sync-field">
-        <label>Supabase anon key</label>
-        <input id="cloud-key" type="password" placeholder="Paste the public anon key">
-      </div>
-      <div class="sync-field">
-        <label>Storage bucket name</label>
-        <input id="cloud-bucket" type="text" placeholder="devikas-library">
-      </div>
       <div class="sync-field">
         <label>Email</label>
         <input id="auth-email" type="email" placeholder="you@example.com">
@@ -401,7 +406,7 @@ body {
     </div>
 
     <div class="sync-user" id="sync-user">Not signed in yet.</div>
-    <p class="sync-note">Setup once in Supabase: use the same bucket name here and in Supabase, then click <code>Copy RLS SQL</code>, paste into Supabase SQL Editor, and run once.</p>
+    <p class="sync-note">Sign in once with email and password. Your library syncs privately in cloud storage in the background.</p>
     </div>
   </div>
 
@@ -581,8 +586,8 @@ const LEGACY_LOCAL_KEY = 'devika_lib_v3';
 const LOCAL_CACHE_KEY = 'devika_lib_cloud_cache_v1';
 const CLOUD_SETTINGS_KEY = 'devika_lib_supabase_settings_v1';
 const SYNC_PANEL_KEY = 'devika_lib_sync_panel_v1';
-const DEFAULT_CLOUD_URL = '';
-const DEFAULT_CLOUD_KEY = '';
+const DEFAULT_CLOUD_URL = 'https://bdmamauvwuajnpanqvqv.supabase.co';
+const DEFAULT_CLOUD_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkbWFtYXV2d3Vham5wYW5xdnF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ2MTM0NzAsImV4cCI6MjA5MDE4OTQ3MH0.TeUtx5cg88-UeHxSD4XZHBa50YvUBNmkTVkq5wDvpH0';
 const DEFAULT_CLOUD_BUCKET = 'devikas-library';
 const CLOUD_FILE = 'library.json';
 const AUTO_SYNC_DEBOUNCE_MS = 450;
@@ -917,6 +922,20 @@ function toggleSyncPanel() {
   applySyncPanelState(!card.classList.contains('collapsed'), true);
 }
 
+function onSyncCardClick(event) {
+  const card = document.getElementById('sync-card');
+  if(!card || !card.classList.contains('collapsed')) return;
+  if(event?.target?.closest('button, input, select, textarea, a, .sync-collapse-btn')) return;
+  applySyncPanelState(false, true);
+}
+
+function collapseSyncPanelOnOutsideClick(event) {
+  const card = document.getElementById('sync-card');
+  if(!card || card.classList.contains('collapsed')) return;
+  if(event?.target?.closest('#sync-card')) return;
+  applySyncPanelState(true, true);
+}
+
 function initSyncPanelState() {
   applySyncPanelState(false, false);
 }
@@ -991,14 +1010,11 @@ async function initSupabaseFromSettings(settings) {
 }
 
 function settingsFromForm() {
-  const saved = readCloudSettings() || {};
-  const inputUrl = document.getElementById('cloud-url')?.value.trim() || '';
-  const inputKey = document.getElementById('cloud-key')?.value.trim() || '';
-  const inputBucket = document.getElementById('cloud-bucket')?.value.trim() || '';
-  const url = inputUrl || saved.url || DEFAULT_CLOUD_URL;
-  const key = inputKey || saved.key || DEFAULT_CLOUD_KEY;
-  const bucket = inputBucket || saved.bucket || DEFAULT_CLOUD_BUCKET;
-  return { url, key, bucket };
+  return {
+    url: DEFAULT_CLOUD_URL,
+    key: DEFAULT_CLOUD_KEY,
+    bucket: DEFAULT_CLOUD_BUCKET,
+  };
 }
 
 function cloudSettingsSignature(settings) {
@@ -1017,7 +1033,7 @@ async function applyCloudSettingsFromForm(options = {}) {
   const s = persistCloudSettingsDraft();
 
   if(!s.url || !s.key) {
-    if(!silent) toast('Add the Supabase project URL and key first.');
+    if(!silent) toast('Cloud setup is not available right now.');
     lastAppliedCloudSettingsSig = '';
     supabaseClient = null;
     currentUser = null;
@@ -1061,7 +1077,7 @@ function bindCloudSettingsAutoApply() {
 async function ensureClientFromForm(_persist) {
   const s = settingsFromForm();
   if(!s.url || !s.key) {
-    toast('Add the Supabase project URL and key first.');
+    toast('Cloud setup is not available right now.');
     return false;
   }
   const ok = await applyCloudSettingsFromForm({ silent: true, force: true });
@@ -1071,7 +1087,7 @@ async function ensureClientFromForm(_persist) {
 function friendlyAuthError(err) {
   const msg = (err?.message || '').toLowerCase();
   if(msg.includes('invalid api key')) {
-    return 'Invalid API key. Use Project URL + Anon Key (Legacy) from the same Supabase project. Changes in these fields apply automatically.';
+    return 'Cloud connection key is invalid. Please contact the app owner.';
   }
   if(msg.includes('email not confirmed')) {
     return 'Email not confirmed. Confirm from inbox (or confirm user in Supabase Auth Users) and sign in again.';
@@ -1082,15 +1098,12 @@ function friendlyAuthError(err) {
   return err?.message || 'Authentication failed.';
 }
 function currentBucket() {
-  const inputBucket = document.getElementById('cloud-bucket')?.value.trim();
-  if(inputBucket) return inputBucket;
-  const saved = readCloudSettings();
-  return (saved?.bucket || DEFAULT_CLOUD_BUCKET).trim();
+  return DEFAULT_CLOUD_BUCKET;
 }
 
 function friendlyCloudError(err) {
   const msg = (err?.message || '').toLowerCase();
-  if(msg.includes('invalid api key')) return 'Invalid API key. Use Project URL + Anon Key (Legacy). Changes in these fields apply automatically.';
+  if(msg.includes('invalid api key')) return 'Cloud connection key is invalid. Please contact the app owner.';
   if(msg.includes('bucket not found')) return `Bucket not found: "${currentBucket()}". Use the exact bucket name from Supabase.`;
   if(msg.includes('row-level security')) return 'Storage policy blocked this action. Add Storage RLS policies for your bucket.';
   return err?.message || 'Cloud sync failed.';
@@ -1456,18 +1469,9 @@ async function uploadPdfFileToCloud(file, bookId) {
   });
   if(error) throw error;
 
-  let pdfUrl = null;
-  const pub = supabaseClient.storage.from(bucket).getPublicUrl(path);
-  if(pub?.data?.publicUrl) {
-    pdfUrl = pub.data.publicUrl;
-  } else {
-    const signed = await supabaseClient.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 30);
-    if(signed?.data?.signedUrl) pdfUrl = signed.data.signedUrl;
-  }
-
   return {
     pdfPath: path,
-    pdfUrl,
+    pdfUrl: null,
     pdfName: file?.name || `${bookId}.pdf`,
     pdfSize: Number(file?.size) || 0,
   };
@@ -1512,31 +1516,9 @@ async function fetchPdfBytesForBook(book) {
 async function resolveReaderPdfSource(book) {
   if(!book) return null;
 
-  const pdfUrl = typeof book.pdfUrl === 'string' ? book.pdfUrl.trim() : '';
-  if(pdfUrl) {
-    return { type: 'url', value: pdfUrl };
-  }
-
-  const pdfPath = typeof book.pdfPath === 'string' ? book.pdfPath.trim() : '';
-  if(pdfPath && supabaseClient && currentUser) {
-    try {
-      const { data, error } = await supabaseClient.storage.from(currentBucket()).download(pdfPath);
-      if(!error && data) {
-        const ab = await data.arrayBuffer();
-        return { type: 'data', value: new Uint8Array(ab) };
-      }
-    } catch(e) {}
-  }
-
-  const legacyRaw = typeof book.legacyPdfData === 'string'
-    ? book.legacyPdfData
-    : (typeof book.pdfData === 'string' ? book.pdfData : '');
-  if(legacyRaw) {
-    const blob = dataUrlToBlob(legacyRaw);
-    if(blob) {
-      const ab = await blob.arrayBuffer();
-      return { type: 'data', value: new Uint8Array(ab) };
-    }
+  const bytes = await fetchPdfBytesForBook(book);
+  if(bytes) {
+    return { type: 'data', value: bytes };
   }
 
   return null;
@@ -1608,7 +1590,7 @@ function removeBatchPdfAt(index) {
 }
 
 function handleBatchPdfSelection(e) {
-  const files = Array.from(e?.target?.files || []).filter(f => f && f.type === 'application/pdf');
+  const files = Array.from(e?.target?.files || []).filter(f => f && (f.type === 'application/pdf' || /\\.pdf$/i.test(f.name || '')));
   if(!files.length) return;
 
   const existing = new Set(pendingBatchFiles.map(f => `${f.name}|${f.size}|${f.lastModified}`));
@@ -1669,13 +1651,21 @@ async function saveBatchAdd() {
 
   const created = [];
   let failed = 0;
+  let lastError = null;
 
   for(const file of pendingBatchFiles) {
     try {
       const id = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-      const ab = await readFileAsArrayBuffer(file);
-      const pdfCover = await generatePdfCover(new Uint8Array(ab));
       const uploaded = await uploadPdfFileToCloud(file, id);
+
+      let pdfCover = null;
+      try {
+        const ab = await readFileAsArrayBuffer(file);
+        pdfCover = await generatePdfCover(new Uint8Array(ab));
+      } catch(_coverErr) {
+        pdfCover = null;
+      }
+
       created.push({
         id,
         title: normalizeBatchTitle(file.name),
@@ -1697,6 +1687,7 @@ async function saveBatchAdd() {
       });
     } catch(err) {
       failed += 1;
+      lastError = err;
     }
   }
 
@@ -1706,7 +1697,8 @@ async function saveBatchAdd() {
   }
 
   if(!created.length) {
-    toast('Could not process those PDF files.');
+    const msg = lastError ? friendlyCloudError(lastError) : 'Could not process those PDF files.';
+    toast(msg);
     return;
   }
 
@@ -2383,12 +2375,6 @@ async function openPdfInTab(id) {
   const b = books.find(x => String(x.id) === String(id));
   if(!b || !hasPdfAsset(b)) return;
 
-  const directUrl = typeof b.pdfUrl === 'string' ? b.pdfUrl.trim() : '';
-  if(directUrl) {
-    window.open(directUrl, '_blank', 'noopener');
-    return;
-  }
-
   const popup = window.open('', '_blank');
   try {
     const blob = await fetchPdfBlobForBook(b);
@@ -2916,6 +2902,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     refreshSyncUI();
   }
   syncPanelFromAuthState();
+  document.addEventListener('pointerdown', collapseSyncPanelOnOutsideClick);
 });
 
 document.addEventListener('keydown', async e => {
@@ -2959,6 +2946,11 @@ document.addEventListener('keydown', async e => {
 </script>
 </body>
 </html>
+
+
+
+
+
 
 
 
