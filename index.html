@@ -211,6 +211,88 @@ body {
 .reader-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .reader-btn.close-reader { border-color: rgba(232,180,192,0.45); color: #e8b4c0; }
 .reader-btn.close-reader:hover { background: rgba(232,180,192,0.1); }
+.reader-mobile-close {
+  display: none;
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  right: 10px;
+  z-index: 4;
+  border: 0.5px solid rgba(232,180,192,0.62);
+  background: rgba(24,10,10,0.72);
+  color: #f4cdd7;
+  font-family: 'Lato', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 8px 12px;
+  backdrop-filter: blur(2px);
+}
+.reader-mobile-fs {
+  display: none;
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  left: 10px;
+  z-index: 4;
+  border: 0.5px solid rgba(180,206,232,0.62);
+  background: rgba(24,10,10,0.72);
+  color: #d2e4f7;
+  font-family: 'Lato', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 8px 12px;
+  backdrop-filter: blur(2px);
+}
+.reader-mobile-nav-layer {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.reader-mobile-tap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: min(24vw, 170px);
+  min-width: 78px;
+  border: none;
+  background: transparent;
+  pointer-events: none;
+  touch-action: manipulation;
+}
+.reader-mobile-tap-left { left: 0; }
+.reader-mobile-tap-right { right: 0; }
+.reader-mobile-pagechip {
+  display: none;
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  transform: translateX(-50%);
+  z-index: 4;
+  border: 0.5px solid rgba(212,200,232,0.58);
+  background: rgba(24,10,10,0.68);
+  color: #efe6f9;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 6px 11px;
+  backdrop-filter: blur(2px);
+}
+.reader-mobile-close,
+.reader-mobile-fs,
+.reader-mobile-pagechip {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.reader-overlay.mobile-chrome-hidden .reader-mobile-close,
+.reader-overlay.mobile-chrome-hidden .reader-mobile-fs,
+.reader-overlay.mobile-chrome-hidden .reader-mobile-pagechip {
+  opacity: 0;
+  pointer-events: none;
+}
 .reader-canvas-wrap { flex: 1; overflow: auto; padding: 20px 18px 26px; display: flex; justify-content: center; align-items: flex-start; }
 .reader-canvas { background: #ffffff; box-shadow: 0 18px 42px rgba(0,0,0,0.42); border-radius: 3px; max-width: 100%; height: auto; }
 
@@ -297,10 +379,21 @@ body {
   .reader-canvas-wrap { padding: 14px 10px 20px; }
   .sync-grid { grid-template-columns: 1fr; }
 }
-@media (max-width: 520px) {
+@media (max-width: 760px), (pointer: coarse), (hover: none) and (pointer: coarse) {
   .grid { gap: 10px; }
-  .reader-bar .reader-title { width: 100%; min-width: 100%; }
-  .reader-meta { order: 2; width: 100%; }
+  .reader-bar { display: none; }
+  .reader-mobile-close { display: inline-flex; align-items: center; justify-content: center; }
+  .reader-mobile-fs { display: inline-flex; align-items: center; justify-content: center; }
+  .reader-mobile-nav-layer { display: block; }
+  .reader-mobile-pagechip { display: inline-flex; align-items: center; justify-content: center; }
+  .reader-canvas-wrap {
+    padding: 0;
+    justify-content: center;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y pinch-zoom;
+  }
+  .reader-canvas { box-shadow: none; border-radius: 0; max-width: 100vw; }
 }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes fadeOverlay { from { opacity: 0; } to { opacity: 1; } }
@@ -533,6 +626,8 @@ body {
 
 <!-- PDF Reader -->
 <div id="reader-overlay" class="reader-overlay" style="display:none">
+  <button class="reader-mobile-fs" id="reader-mobile-fs-btn" onclick="toggleReaderFullscreen()">⤢ Full screen</button>
+  <button class="reader-mobile-close" onclick="closeReader()">✕ Close reader</button>
   <div class="reader-bar">
     <span class="reader-title" id="reader-title">Reading...</span>
     <span class="reader-meta" id="reader-page-meta">Page 1 / 1</span>
@@ -542,10 +637,16 @@ body {
     <button class="reader-btn" id="reader-scroll-down-btn">↓ Down</button>
     <button class="reader-btn" id="reader-zoom-out-btn">− Zoom</button>
     <button class="reader-btn" id="reader-zoom-in-btn">+ Zoom</button>
+    <button class="reader-btn" id="reader-fs-btn">⤢ Full screen</button>
     <button class="reader-btn" id="reader-open-btn">↗ Open in tab</button>
     <button class="reader-btn" id="reader-dl-btn">⬇ Download</button>
     <button class="reader-btn close-reader" onclick="closeReader()">✕ Close reader</button>
   </div>
+  <div class="reader-mobile-nav-layer" id="reader-mobile-nav-layer" aria-hidden="true">
+    <button class="reader-mobile-tap reader-mobile-tap-left" id="reader-mobile-prev-tap" type="button" aria-label="Previous page"></button>
+    <button class="reader-mobile-tap reader-mobile-tap-right" id="reader-mobile-next-tap" type="button" aria-label="Next page"></button>
+  </div>
+  <div class="reader-mobile-pagechip" id="reader-mobile-pagechip">Page 1 / 1</div>
   <div class="reader-canvas-wrap" id="reader-canvas-wrap">
     <canvas id="reader-canvas" class="reader-canvas"></canvas>
   </div>
@@ -2238,11 +2339,146 @@ let readerBookId = null;
 let readerWheelHandler = null;
 let readerWheelDeltaCarry = 0;
 let readerWheelPaging = false;
+let readerMobileChromeTimer = null;
+let readerTouchStartX = 0;
+let readerTouchStartY = 0;
+let readerTouchStartTs = 0;
+let readerLastTapTs = 0;
+let readerChromeHiddenOnTouchStart = false;
 
 function readerIsOpen() {
   return document.getElementById('reader-overlay')?.style.display === 'flex';
 }
 
+function getReaderFullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement || null;
+}
+
+function readerIsFullscreen() {
+  const overlay = document.getElementById('reader-overlay');
+  const fsEl = getReaderFullscreenElement();
+  return !!overlay && !!fsEl && fsEl === overlay;
+}
+
+async function requestReaderFullscreen() {
+  const overlay = document.getElementById('reader-overlay');
+  if(!overlay) return false;
+  if(overlay.requestFullscreen) { await overlay.requestFullscreen(); return true; }
+  if(overlay.webkitRequestFullscreen) { overlay.webkitRequestFullscreen(); return true; }
+  if(overlay.msRequestFullscreen) { overlay.msRequestFullscreen(); return true; }
+  return false;
+}
+
+async function exitReaderFullscreen() {
+  if(document.exitFullscreen) { await document.exitFullscreen(); return true; }
+  if(document.webkitExitFullscreen) { document.webkitExitFullscreen(); return true; }
+  if(document.msExitFullscreen) { document.msExitFullscreen(); return true; }
+  return false;
+}
+
+function updateReaderFullscreenUi() {
+  const isFs = readerIsFullscreen();
+  const label = isFs ? '⤢ Exit full screen' : '⤢ Full screen';
+  const fsBtn = document.getElementById('reader-fs-btn');
+  if(fsBtn) fsBtn.textContent = label;
+  const mobileFsBtn = document.getElementById('reader-mobile-fs-btn');
+  if(mobileFsBtn) mobileFsBtn.textContent = isFs ? '⤢ Exit' : '⤢ Full';
+}
+
+async function toggleReaderFullscreen() {
+  if(!readerIsOpen()) return;
+  try {
+    if(readerIsFullscreen()) {
+      await exitReaderFullscreen();
+    } else {
+      const ok = await requestReaderFullscreen();
+      if(!ok) {
+        toast('Full screen is not supported on this device.');
+        return;
+      }
+    }
+  } catch(e) {
+    toast('Could not switch full screen mode.');
+  } finally {
+    updateReaderFullscreenUi();
+  }
+}
+
+function isMobileReaderMode() {
+  return window.matchMedia('(max-width: 760px), (hover: none) and (pointer: coarse)').matches;
+}
+
+function showReaderMobileChromeTemporarily() {
+  const overlay = document.getElementById('reader-overlay');
+  if(!overlay || !isMobileReaderMode()) return;
+  overlay.classList.remove('mobile-chrome-hidden');
+  if(readerMobileChromeTimer) clearTimeout(readerMobileChromeTimer);
+  readerMobileChromeTimer = setTimeout(() => {
+    if(readerIsOpen()) overlay.classList.add('mobile-chrome-hidden');
+  }, 2200);
+}
+
+function resetReaderMobileChrome() {
+  const overlay = document.getElementById('reader-overlay');
+  if(overlay) overlay.classList.remove('mobile-chrome-hidden');
+  if(readerMobileChromeTimer) {
+    clearTimeout(readerMobileChromeTimer);
+    readerMobileChromeTimer = null;
+  }
+  readerChromeHiddenOnTouchStart = false;
+}
+
+function readerHandleTouchStart(event) {
+  if(!isMobileReaderMode()) return;
+  const touch = event?.changedTouches?.[0];
+  if(!touch) return;
+  const overlay = document.getElementById('reader-overlay');
+  readerChromeHiddenOnTouchStart = !!overlay && overlay.classList.contains('mobile-chrome-hidden');
+  readerTouchStartX = touch.clientX;
+  readerTouchStartY = touch.clientY;
+  readerTouchStartTs = Date.now();
+  showReaderMobileChromeTemporarily();
+}
+
+async function readerHandleTouchEnd(event) {
+  if(!isMobileReaderMode()) return;
+  const touch = event?.changedTouches?.[0];
+  if(!touch) return;
+  const dx = touch.clientX - readerTouchStartX;
+  const dy = touch.clientY - readerTouchStartY;
+  const dt = Date.now() - readerTouchStartTs;
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+
+  if(absX >= 56 && absX > absY * 1.2 && dt <= 700) {
+    if(dx < 0) await goReaderNext();
+    else await goReaderPrev();
+    readerLastTapTs = 0;
+    return;
+  }
+
+  const isTap = absX <= 12 && absY <= 12 && dt <= 280;
+  if(!isTap) return;
+
+
+  const now = Date.now();
+  if(now - readerLastTapTs <= 320) {
+    readerLastTapTs = 0;
+    if(readerDoc) {
+      if(readerZoom < 1.45) {
+        readerZoom = Math.min(3.0, readerZoom + 0.55);
+      } else {
+        await setReaderZoomToFit(readerPage);
+      }
+      await renderReaderPage();
+    }
+    return;
+  }
+
+  readerLastTapTs = now;
+  if(touch.clientX >= window.innerWidth / 2) await goReaderNext();
+  else await goReaderPrev();
+}
 function readerKeyTargetIgnored(target) {
   if(!target) return false;
   if(target.isContentEditable) return true;
@@ -2252,12 +2488,14 @@ function readerKeyTargetIgnored(target) {
 
 async function goReaderPrev() {
   if(!readerDoc || readerPage <= 1) return;
+  showReaderMobileChromeTemporarily();
   readerPage -= 1;
   await renderReaderPage();
 }
 
 async function goReaderNext() {
   if(!readerDoc || readerPage >= readerTotalPages) return;
+  showReaderMobileChromeTemporarily();
   readerPage += 1;
   await renderReaderPage();
 }
@@ -2329,9 +2567,12 @@ async function onReaderWheel(e) {
 }
 function updateReaderUi() {
   const pageMeta = document.getElementById('reader-page-meta');
+  const pageChip = document.getElementById('reader-mobile-pagechip');
   const prevBtn = document.getElementById('reader-prev-btn');
   const nextBtn = document.getElementById('reader-next-btn');
-  if(pageMeta) pageMeta.textContent = `Page ${readerPage} / ${readerTotalPages || 1}`;
+  const label = `Page ${readerPage} / ${readerTotalPages || 1}`;
+  if(pageMeta) pageMeta.textContent = label;
+  if(pageChip) pageChip.textContent = label;
   if(prevBtn) prevBtn.disabled = readerPage <= 1;
   if(nextBtn) nextBtn.disabled = !readerTotalPages || readerPage >= readerTotalPages;
 }
@@ -2426,18 +2667,32 @@ async function openReader(id) {
     readerZoom = Math.min(3.0, readerZoom + 0.15);
     await renderReaderPage();
   };
+  const fsBtn = document.getElementById('reader-fs-btn');
+  if(fsBtn) fsBtn.onclick = () => toggleReaderFullscreen();
+  const mobileFsBtn = document.getElementById('reader-mobile-fs-btn');
+  if(mobileFsBtn) mobileFsBtn.onclick = () => { showReaderMobileChromeTemporarily(); toggleReaderFullscreen(); };
+  const prevTap = document.getElementById('reader-mobile-prev-tap');
+  if(prevTap) prevTap.onclick = async () => { showReaderMobileChromeTemporarily(); await goReaderPrev(); };
+  const nextTap = document.getElementById('reader-mobile-next-tap');
+  if(nextTap) nextTap.onclick = async () => { showReaderMobileChromeTemporarily(); await goReaderNext(); };
 
   document.getElementById('reader-overlay').style.display = 'flex';
+  updateReaderFullscreenUi();
+  showReaderMobileChromeTemporarily();
   const wrap = document.getElementById('reader-canvas-wrap');
   wrap.scrollTop = 0;
   wrap.scrollLeft = 0;
   readerWheelDeltaCarry = 0;
   readerWheelPaging = false;
+  readerLastTapTs = 0;
+  readerChromeHiddenOnTouchStart = false;
   if(readerWheelHandler) {
     wrap.removeEventListener('wheel', readerWheelHandler);
   }
   readerWheelHandler = e => { onReaderWheel(e); };
   wrap.addEventListener('wheel', readerWheelHandler, { passive: false });
+  wrap.ontouchstart = readerHandleTouchStart;
+  wrap.ontouchend = async e => { await readerHandleTouchEnd(e); };
 
   try {
     const pdfjsLib = window['pdfjs-dist/build/pdf'];
@@ -2466,14 +2721,23 @@ async function openReader(id) {
 
 function closeReader() {
   const changedBookId = readerBookId;
+  if(readerIsFullscreen()) {
+    exitReaderFullscreen().catch(() => {});
+  }
   document.getElementById('reader-overlay').style.display = 'none';
   const wrap = document.getElementById('reader-canvas-wrap');
   if(wrap && readerWheelHandler) {
     wrap.removeEventListener('wheel', readerWheelHandler);
   }
+  if(wrap) {
+    wrap.ontouchstart = null;
+    wrap.ontouchend = null;
+  }
   readerWheelHandler = null;
   readerWheelDeltaCarry = 0;
   readerWheelPaging = false;
+  readerLastTapTs = 0;
+  readerChromeHiddenOnTouchStart = false;
   if(readerRenderTask) {
     try { readerRenderTask.cancel(); } catch(e) {}
     readerRenderTask = null;
@@ -2497,6 +2761,8 @@ function closeReader() {
     URL.revokeObjectURL(readerBlobUrl);
     readerBlobUrl = null;
   }
+  resetReaderMobileChrome();
+  updateReaderFullscreenUi();
   if(changedBookId) render();
 }
 
@@ -2903,6 +3169,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
   syncPanelFromAuthState();
   document.addEventListener('pointerdown', collapseSyncPanelOnOutsideClick);
+  ['fullscreenchange','webkitfullscreenchange','msfullscreenchange'].forEach(evt => document.addEventListener(evt, updateReaderFullscreenUi));
 });
 
 document.addEventListener('keydown', async e => {
@@ -2937,6 +3204,12 @@ document.addEventListener('keydown', async e => {
     return;
   }
 
+  if(e.key === 'f' || e.key === 'F') {
+    e.preventDefault();
+    await toggleReaderFullscreen();
+    return;
+  }
+
   if(e.key === 'ArrowDown') {
     e.preventDefault();
     readerKeyScrollDown();
@@ -2946,6 +3219,31 @@ document.addEventListener('keydown', async e => {
 </script>
 </body>
 </html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
