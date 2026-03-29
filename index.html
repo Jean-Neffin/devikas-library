@@ -307,6 +307,18 @@ body {
   animation: tapRipple 0.4s ease;
   z-index: 2;
 }
+.site-ripple {
+  position: fixed;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(196,118,138,0.22);
+  border: 1px solid rgba(196,118,138,0.3);
+  transform: translate(-50%, -50%) scale(0);
+  pointer-events: none;
+  z-index: 1200;
+  animation: siteRipple 0.56s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
 .reader-touch-hint {
   animation: hintFloat 0.6s ease;
   position: fixed;
@@ -451,6 +463,12 @@ body {
 @keyframes fadeOverlay { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(16px) scale(0.97); } to { opacity: 1; transform: none; } }
 @keyframes tapRipple { to { transform: scale(6); opacity: 0; } }
+@keyframes siteRipple {
+  to {
+    transform: translate(-50%, -50%) scale(7);
+    opacity: 0;
+  }
+}
 @keyframes hintFloat { from { transform: translate(-50%, 20px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
 </style>
 </head>
@@ -2504,6 +2522,24 @@ function createTapFeedback(clientX, clientY) {
   wrap.appendChild(ripple);
   ripple.addEventListener('animationend', () => ripple.remove());
 }
+
+function createSiteRipple(clientX, clientY) {
+  if(typeof clientX !== 'number' || typeof clientY !== 'number') return;
+  const ripple = document.createElement('span');
+  ripple.className = 'site-ripple';
+  ripple.style.left = `${clientX}px`;
+  ripple.style.top = `${clientY}px`;
+  document.body.appendChild(ripple);
+  ripple.addEventListener('animationend', () => ripple.remove());
+}
+
+function handleGlobalDesktopRipple(event) {
+  if(!event || event.button !== 0) return;
+  if(event.pointerType && event.pointerType !== 'mouse') return;
+  if(event.isPrimary === false) return;
+  if(event.target?.closest('#reader-canvas-wrap')) return;
+  createSiteRipple(event.clientX, event.clientY);
+}
 function scheduleReaderChromeHide(reason = 'interaction') {
   const overlay = document.getElementById('reader-overlay');
   if(!overlay || !readerIsOpen()) return;
@@ -2620,6 +2656,15 @@ function readerHandleTouchStart(event) {
 
 function readerHandleTouchMove(event) {
   return;
+}
+
+function readerHandleDesktopPointerDown(event) {
+  if(isMobileReaderMode()) return;
+  if(!event || event.button !== 0) return;
+  if(event.pointerType === 'touch') return;
+  if(event.target?.closest('.reader-bar, .reader-btn')) return;
+  createTapFeedback(event.clientX, event.clientY);
+  markInteraction();
 }
 
 async function readerHandleTouchEnd(event) {
@@ -2939,6 +2984,7 @@ async function openReader(id) {
   }
   readerWheelHandler = e => { onReaderWheel(e); };
   wrap.addEventListener('wheel', readerWheelHandler, { passive: false });
+  wrap.onpointerdown = readerHandleDesktopPointerDown;
   wrap.ontouchstart = readerHandleTouchStart;
   wrap.ontouchend = async e => { await readerHandleTouchEnd(e); };
   wrap.onscroll = () => { handleReaderScrollVisibility(); };
@@ -2998,6 +3044,7 @@ function closeReader() {
     wrap.removeEventListener('wheel', readerWheelHandler);
   }
   if(wrap) {
+    wrap.onpointerdown = null;
     wrap.ontouchstart = null;
     wrap.ontouchend = null;
     wrap.onscroll = null;
@@ -3444,6 +3491,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
   syncPanelFromAuthState();
   document.addEventListener('pointerdown', collapseSyncPanelOnOutsideClick);
+  document.addEventListener('pointerdown', handleGlobalDesktopRipple, { passive: true });
   ['fullscreenchange','webkitfullscreenchange','msfullscreenchange'].forEach(evt => document.addEventListener(evt, handleReaderFullscreenChange));
 });
 
